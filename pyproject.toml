@@ -19,7 +19,7 @@ dependencies = [
     "nibabel",
     "opencv-contrib-python",
     "openpyxl",
-    "pandas",
+    "pandas < 3",
     "plotly",
     "pytesseract",
     "scipy",
