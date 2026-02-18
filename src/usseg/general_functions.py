@@ -480,7 +480,7 @@ def search_for_ticks(input_image_obj, side, left_dimensions, right_dimensions):
     binary_image = BinaryNP
     pixel_sum = binary_image  # .sum(-1)  # sum over color (last) axis
     nonzero_pixels = (pixel_sum > 0).astype(bool)
-    W = morphology.remove_small_objects(nonzero_pixels, max_size=19, connectivity=2)
+    W = morphology.remove_small_objects(nonzero_pixels, max_size=15, connectivity=2)
     W = W.astype(float)
 
     im = input_image_obj
@@ -511,16 +511,67 @@ def search_for_ticks(input_image_obj, side, left_dimensions, right_dimensions):
     cv2.drawContours(ROI2, contours, -1, [255], 1)
     Cs = list(contours)  # list the contour coordinates as array
     if side == "Right":
-        for Column in range(
-                0, int(right_dimensions[1]) - int(right_dimensions[0])
-        ):  # Move across and find the line with most contours in.
-            count = 0
-            for Row in range(0, (int(right_dimensions[3]) - int(right_dimensions[2]))):
-                if ROI2[Row, Column] == 255:
-                    count = count + 1
-
-            if count > (15):
-                ROI2[:, Column] = 0
+        # Object-based approach: identify tick objects and remove columns with too many overlapping ticks
+        # Recompute W from the final ROIAX for consistency
+        W_right = (ROIAX > 0).astype(bool)
+        W_right = morphology.remove_small_objects(W_right, max_size=15, connectivity=2)
+        
+        # Label connected components
+        labels = measure.label(W_right, connectivity=2)
+        props = measure.regionprops(labels)
+        
+        # Define size thresholds for tick-like objects
+        min_tick_area = 10  # Minimum area for a tick
+        max_tick_area = 200  # Maximum area for a tick (adjust based on your images)
+        max_tick_height = 5  # Maximum height for a tick
+        
+        tick_objects = []  # Indices of tick-like components
+        
+        for idx, prop in enumerate(props, start=1):
+            area = prop.area
+            bbox = prop.bbox  # (min_row, min_col, max_row, max_col)
+            height = bbox[2] - bbox[0]
+            
+            # Classify as tick if area and height are within tick-like ranges
+            if min_tick_area <= area <= max_tick_area and height < max_tick_height:
+                tick_objects.append(idx)
+        
+        # Visualize tick objects (for debugging - comment out when not needed)
+        if tick_objects:
+            tick_mask = np.zeros_like(W_right, dtype=bool)
+            for tick_idx in tick_objects:
+                tick_mask[labels == tick_idx] = True
+            
+            # Create RGB visualization: red for tick objects, gray for everything else
+            vis_image = np.zeros((*W_right.shape, 3), dtype=np.uint8)
+            vis_image[W_right] = [128, 128, 128]  # Gray for all objects
+            vis_image[tick_mask] = [255, 0, 0]  # Red for tick objects
+            
+            #plt.figure(figsize=(12, 8))
+            #plt.imshow(vis_image)
+            #plt.title(f'Right axis ROI: Tick objects (red) vs all objects (gray)\nFound {len(tick_objects)} tick objects')
+            #plt.axis('off')
+            #plt.show()
+        
+        # For each column, count how many tick objects touch it
+        roi_height, roi_width = ROI2.shape
+        columns_to_remove = []
+        
+        for Column in range(roi_width):
+            # Count how many distinct tick objects touch this column
+            tick_count = 0
+            for tick_idx in tick_objects:
+                if np.any(labels[:, Column] == tick_idx):
+                    tick_count += 1
+            
+            # Remove column if too many tick objects overlap (likely axis-dominated area)
+            # or if no tick objects touch it (pure axis/noise)
+            if tick_count > 20 or tick_count == 0:
+                columns_to_remove.append(Column)
+        
+        # Remove identified columns from ROI2
+        for Column in columns_to_remove:
+            ROI2[:, Column] = 0
 
     ROI2 = ROI2.astype(np.uint8)
     contours, hierarchy = cv2.findContours(
