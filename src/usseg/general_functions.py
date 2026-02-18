@@ -138,10 +138,8 @@ def initial_segmentation(input_image_obj):
         nonzero_pixels, max_size=199, connectivity=2
     )  # Remove small objects (noise)
     segmentation_mask = morphology.remove_small_holes(segmentation_mask, max_size=199)  # Fill in any small holes
-    segmentation_mask = morphology.binary_erosion(
-        segmentation_mask
-    )  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
-    segmentation_mask = morphology.binary_erosion(segmentation_mask)  # Same as above - combine to one line if possible
+    segmentation_mask = morphology.erosion(segmentation_mask)  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
+    segmentation_mask = morphology.erosion(segmentation_mask)  # Same as above - combine to one line if possible
     segmentation_mask = morphology.binary_dilation(
         segmentation_mask
     )  # Dilate to try and recover some of the collateral loss through erosion
@@ -312,12 +310,8 @@ def refine_waveform_segmentation(input_image_obj, Xmin, Xmax, Ymin, Ymax):
         nonzero_pixels, max_size=199, connectivity=2
     )  # Remove small objects (noise)
     refined_segmentation_mask = morphology.remove_small_holes(refined_segmentation_mask, max_size=199)  # Fill in any small holes
-    refined_segmentation_mask = morphology.binary_erosion(
-        refined_segmentation_mask
-    )  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
-    refined_segmentation_mask = morphology.binary_erosion(
-        refined_segmentation_mask
-    )  # Same as above - combine to one line if possible
+    refined_segmentation_mask = morphology.erosion(refined_segmentation_mask)  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
+    refined_segmentation_mask = morphology.erosion(refined_segmentation_mask)  # Same as above - combine to one line if possible
     refined_segmentation_mask = morphology.binary_dilation(
         refined_segmentation_mask
     )  # Dilate to try and recover some of the collateral loss through erosion
@@ -369,7 +363,7 @@ def compute_top_curve(refined_segmentation_mask, Ymin, Ymax, y_zero=None):
     labelled = measure.label(mask)
     rp = measure.regionprops(labelled)
 
-    ws = morphology.binary_erosion(mask).astype(float)
+    ws = morphology.erosion(mask).astype(float)
     top_curve_mask = mask - ws
 
     keep = "upper"
