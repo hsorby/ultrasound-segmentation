@@ -2460,17 +2460,11 @@ def text_from_greyscale(input_image_obj, COL):
                 if match:
                     value = float(match.group(1).replace(' ', ''))
                     unit = match.group(4) if match.group(4) else ""
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": value, "Unit": unit}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": value, "Unit": unit}
                     target_words.remove(word)
                 else:
                     # logger.warning("couldn't find numeric data for line.")
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}
                     target_words.remove(word)
                 matched_lines.add(i)
                 break  # Exit the inner loop once a match is found
