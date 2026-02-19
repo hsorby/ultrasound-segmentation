@@ -1906,10 +1906,17 @@ def plot_correction(Xplot, Yplot, df):
         traceback.print_exc()  # prints the error message and traceback
 
     try:
+        # HR in bpm from extracted text
+        hr_vals = df.loc[df["Word"].str.contains("HR"), "Value"].values
+        hr = float(hr_vals[0]) if len(hr_vals) > 0 else 0.0
+
+        # If HR is zero or invalid, skip time scaling 
+        if not np.isfinite(hr) or hr == 0.0:
+            logger.warning("Invalid HR value for time scaling (%s); skipping time scaling plot.", hr)
+            return df
+
         # Period of the signal in real time scale from text extraction
-        real_period = 1 / (
-                df.loc[df["Word"].str.contains("HR"), "Value"].values[0] / 60
-        )
+        real_period = 1.0 / (hr / 60.0)
         # Calculate a scaling factor
         scale_factor = real_period / arbitrary_period
         x_time = x * scale_factor
