@@ -5,7 +5,7 @@ import math
 import re
 import logging
 
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
 # Module imports
 import matplotlib.pyplot as plt
 from skimage import morphology, measure
