@@ -13,19 +13,15 @@ authors = [{name="Dale Kernot", email="874043@swansea.ac.uk"}]
 license = "GPL-3.0-or-later"
 readme = "README.md"
 dependencies = [
-    "levenshtein",
+    "rapidfuzz",
     "matplotlib",
     "numpy",
-    "nibabel",
     "opencv-contrib-python",
-    "openpyxl",
     "pandas < 3",
-    "plotly",
     "pytesseract",
     "scipy",
     "scikit-image",
     "scikit-learn",
-    "super-image",
     "toml",
 ]
 requires-python = ">3.8"

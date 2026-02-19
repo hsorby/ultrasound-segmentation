@@ -5,7 +5,7 @@ import math
 import re
 import logging
 
-import Levenshtein
+from rapidfuzz.distance import Levenshtein
 # Module imports
 import matplotlib.pyplot as plt
 from skimage import morphology, measure
@@ -135,16 +135,12 @@ def initial_segmentation(input_image_obj):
     nonzero_pixels = (pixel_sum > 0).astype(bool)  # Change type
     # Some processing to refine the target area
     segmentation_mask = morphology.remove_small_objects(
-        nonzero_pixels, 200, connectivity=2
-    )  # Remover small objects (noise)
-    segmentation_mask = morphology.remove_small_holes(segmentation_mask, 200)  # Fill in any small holes
-    segmentation_mask = morphology.binary_erosion(
-        segmentation_mask
-    )  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
-    segmentation_mask = morphology.binary_erosion(segmentation_mask)  # Same as above - combine to one line if possible
-    segmentation_mask = morphology.binary_dilation(
-        segmentation_mask
-    )  # Dilate to try and recover some of the collateral loss through erosion
+        nonzero_pixels, max_size=199, connectivity=2
+    )  # Remove small objects (noise)
+    segmentation_mask = morphology.remove_small_holes(segmentation_mask, max_size=199)  # Fill in any small holes
+    segmentation_mask = morphology.erosion(segmentation_mask)  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
+    segmentation_mask = morphology.erosion(segmentation_mask)  # Same as above - combine to one line if possible
+    segmentation_mask = morphology.dilation(segmentation_mask)  # Dilate to try and recover some of the collateral loss through erosion
     segmentation_mask = segmentation_mask.astype(float)  # Change type
 
     contours = find_contours(segmentation_mask)  # contours of each object withing segmentation_mask
@@ -203,7 +199,7 @@ def define_end_rois(segmentation_mask, Xmin, Xmax, Ymin, Ymax):
     Xmin_L = 0  # Xmin - 50
     Xmax_L = Xmin - 1
     if (Ymin - 125) > 0:
-        Ymin_L = Ymin - 25
+        Ymin_L = Ymin - 75
     else:
         Ymin_L = 1
     Ymax_L = Ylim
@@ -212,7 +208,7 @@ def define_end_rois(segmentation_mask, Xmin, Xmax, Ymin, Ymax):
     Xmin_R = Xmax
     Xmax_R = Xlim  # Xmax + 50
     if (Ymin - 125) > 0:
-        Ymin_R = Ymin - 25
+        Ymin_R = Ymin - 75
     else:
         Ymin_R = 1
 
@@ -309,26 +305,15 @@ def refine_waveform_segmentation(input_image_obj, Xmin, Xmax, Ymin, Ymax):
     nonzero_pixels = (binary_image > 0).astype(bool)  # Change type
     # Some processing to refine the target area
     refined_segmentation_mask = morphology.remove_small_objects(
-        nonzero_pixels, 200, connectivity=2
-    )  # Remover small objects (noise)
-    refined_segmentation_mask = morphology.remove_small_holes(
-        refined_segmentation_mask, 200
-    )  # Fill in any small holes
-    refined_segmentation_mask = morphology.binary_erosion(
-        refined_segmentation_mask
-    )  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
-    refined_segmentation_mask = morphology.binary_erosion(
-        refined_segmentation_mask
-    )  # Same as above - combine to one line if possible
-    refined_segmentation_mask = morphology.binary_dilation(
-        refined_segmentation_mask
-    )  # Dilate to try and recover some of the collateral loss through erosion
-    refined_segmentation_mask = refined_segmentation_mask.astype(float)  # Change type
+        nonzero_pixels, max_size=199, connectivity=2
+    )  # Remove small objects (noise)
+    refined_segmentation_mask = morphology.remove_small_holes(refined_segmentation_mask, max_size=199)  # Fill in any small holes
+    refined_segmentation_mask = morphology.erosion(refined_segmentation_mask)  # Erode the remaining binary, this can remove any ticks that may be joined to the main body
+    refined_segmentation_mask = morphology.erosion(refined_segmentation_mask)  # Same as above - combine to one line if possible
+    refined_segmentation_mask = morphology.dilation(refined_segmentation_mask)  # Dilate to try and recover some of the collateral loss through erosion
 
-    refined_segmentation_mask = morphology.binary_dilation(refined_segmentation_mask)
-    refined_segmentation_mask = morphology.remove_small_holes(
-        refined_segmentation_mask, 1000
-    )
+    refined_segmentation_mask = morphology.dilation(refined_segmentation_mask)
+    refined_segmentation_mask = morphology.remove_small_holes(refined_segmentation_mask, max_size=999)
     refined_segmentation_mask = morphology.closing(refined_segmentation_mask)
     refined_segmentation_mask = refined_segmentation_mask.astype(int)
     refined_segmentation_mask = scipy.signal.medfilt(refined_segmentation_mask, 3)
@@ -341,10 +326,11 @@ def refine_waveform_segmentation(input_image_obj, Xmin, Xmax, Ymin, Ymax):
     # get size of largest cluster
     sizes = sorted([i.area for i in rp])
     refined_segmentation_mask = refined_segmentation_mask.astype(bool)
-    # remove everything smaller than largest
+    # remove everything smaller than second-largest area + 10
     try:
+        threshold = sizes[-2] + 10
         refined_segmentation_mask = morphology.remove_small_objects(
-            refined_segmentation_mask, min_size=sizes[-2] + 10
+            refined_segmentation_mask, max_size=threshold - 1
         )
     except Exception:
         pass
@@ -372,7 +358,7 @@ def compute_top_curve(refined_segmentation_mask, Ymin, Ymax, y_zero=None):
     labelled = measure.label(mask)
     rp = measure.regionprops(labelled)
 
-    ws = morphology.binary_erosion(mask).astype(float)
+    ws = morphology.erosion(mask).astype(float)
     top_curve_mask = mask - ws
 
     keep = "upper"
@@ -494,7 +480,7 @@ def search_for_ticks(input_image_obj, side, left_dimensions, right_dimensions):
     binary_image = BinaryNP
     pixel_sum = binary_image  # .sum(-1)  # sum over color (last) axis
     nonzero_pixels = (pixel_sum > 0).astype(bool)
-    W = morphology.remove_small_objects(nonzero_pixels, 20, connectivity=2)
+    W = morphology.remove_small_objects(nonzero_pixels, max_size=15, connectivity=2)
     W = W.astype(float)
 
     im = input_image_obj
@@ -525,16 +511,67 @@ def search_for_ticks(input_image_obj, side, left_dimensions, right_dimensions):
     cv2.drawContours(ROI2, contours, -1, [255], 1)
     Cs = list(contours)  # list the contour coordinates as array
     if side == "Right":
-        for Column in range(
-                0, int(right_dimensions[1]) - int(right_dimensions[0])
-        ):  # Move across and find the line with most contours in.
-            count = 0
-            for Row in range(0, (int(right_dimensions[3]) - int(right_dimensions[2]))):
-                if ROI2[Row, Column] == 255:
-                    count = count + 1
-
-            if count > (15):
-                ROI2[:, Column] = 0
+        # Object-based approach: identify tick objects and remove columns with too many overlapping ticks
+        # Recompute W from the final ROIAX for consistency
+        W_right = (ROIAX > 0).astype(bool)
+        W_right = morphology.remove_small_objects(W_right, max_size=15, connectivity=2)
+        
+        # Label connected components
+        labels = measure.label(W_right, connectivity=2)
+        props = measure.regionprops(labels)
+        
+        # Define size thresholds for tick-like objects
+        min_tick_area = 10  # Minimum area for a tick
+        max_tick_area = 200  # Maximum area for a tick (adjust based on your images)
+        max_tick_height = 5  # Maximum height for a tick
+        
+        tick_objects = []  # Indices of tick-like components
+        
+        for idx, prop in enumerate(props, start=1):
+            area = prop.area
+            bbox = prop.bbox  # (min_row, min_col, max_row, max_col)
+            height = bbox[2] - bbox[0]
+            
+            # Classify as tick if area and height are within tick-like ranges
+            if min_tick_area <= area <= max_tick_area and height < max_tick_height:
+                tick_objects.append(idx)
+        
+        # Visualize tick objects (for debugging - comment out when not needed)
+        if tick_objects:
+            tick_mask = np.zeros_like(W_right, dtype=bool)
+            for tick_idx in tick_objects:
+                tick_mask[labels == tick_idx] = True
+            
+            # Create RGB visualization: red for tick objects, gray for everything else
+            vis_image = np.zeros((*W_right.shape, 3), dtype=np.uint8)
+            vis_image[W_right] = [128, 128, 128]  # Gray for all objects
+            vis_image[tick_mask] = [255, 0, 0]  # Red for tick objects
+            
+            #plt.figure(figsize=(12, 8))
+            #plt.imshow(vis_image)
+            #plt.title(f'Right axis ROI: Tick objects (red) vs all objects (gray)\nFound {len(tick_objects)} tick objects')
+            #plt.axis('off')
+            #plt.show()
+        
+        # For each column, count how many tick objects touch it
+        roi_height, roi_width = ROI2.shape
+        columns_to_remove = []
+        
+        for Column in range(roi_width):
+            # Count how many distinct tick objects touch this column
+            tick_count = 0
+            for tick_idx in tick_objects:
+                if np.any(labels[:, Column] == tick_idx):
+                    tick_count += 1
+            
+            # Remove column if too many tick objects overlap (likely axis-dominated area)
+            # or if no tick objects touch it (pure axis/noise)
+            if tick_count > 20 or tick_count == 0:
+                columns_to_remove.append(Column)
+        
+        # Remove identified columns from ROI2
+        for Column in columns_to_remove:
+            ROI2[:, Column] = 0
 
     ROI2 = ROI2.astype(np.uint8)
     contours, hierarchy = cv2.findContours(
@@ -1019,6 +1056,23 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
     """
     numbers = list(numbers)
     positions = [list(p) for p in positions]
+
+    # Convert tick string values to float and drop any that cannot be parsed.
+    valid_numbers = []
+    valid_positions = []
+    for v, p in zip(numbers, positions):
+        try:
+            valid_numbers.append(float(v))
+            valid_positions.append(list(p))
+        except (ValueError, TypeError):
+            logger.warning(
+                "Axis validation for %s side: could not convert tick value '%s' to float; skipping this tick.",
+                side,
+                v,
+            )
+
+    numbers = valid_numbers
+    positions = valid_positions
 
     if len(numbers) < 2 or len(numbers) != len(positions):
         logger.warning(
@@ -1852,10 +1906,17 @@ def plot_correction(Xplot, Yplot, df):
         traceback.print_exc()  # prints the error message and traceback
 
     try:
+        # HR in bpm from extracted text
+        hr_vals = df.loc[df["Word"].str.contains("HR"), "Value"].values
+        hr = float(hr_vals[0]) if len(hr_vals) > 0 else 0.0
+
+        # If HR is zero or invalid, skip time scaling 
+        if not np.isfinite(hr) or hr == 0.0:
+            logger.warning("Invalid HR value for time scaling (%s); skipping time scaling plot.", hr)
+            return df
+
         # Period of the signal in real time scale from text extraction
-        real_period = 1 / (
-                df.loc[df["Word"].str.contains("HR"), "Value"].values[0] / 60
-        )
+        real_period = 1.0 / (hr / 60.0)
         # Calculate a scaling factor
         scale_factor = real_period / arbitrary_period
         x_time = x * scale_factor
@@ -1872,7 +1933,7 @@ def plot_correction(Xplot, Yplot, df):
         plt.xlabel("Time (s)")
         plt.ylabel("Flowrate (cm/s)")
     except Exception:
-        traceback.print_exc()
+        logger.warning("Could not plot time-scaled waveform; continuing.", exc_info=True)
 
     return df
 
@@ -2460,17 +2521,11 @@ def text_from_greyscale(input_image_obj, COL):
                 if match:
                     value = float(match.group(1).replace(' ', ''))
                     unit = match.group(4) if match.group(4) else ""
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": value, "Unit": unit}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": value, "Unit": unit}
                     target_words.remove(word)
                 else:
                     # logger.warning("couldn't find numeric data for line.")
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}
                     target_words.remove(word)
                 matched_lines.add(i)
                 break  # Exit the inner loop once a match is found
@@ -2499,17 +2554,11 @@ def text_from_greyscale(input_image_obj, COL):
                     if match:
                         value = float(match.group(1))
                         unit = match.group(2) if match.group(2) else ""
-                        df = pd.concat(
-                            [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": value, "Unit": unit}])],
-                            ignore_index=True,
-                        )
+                        df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": value, "Unit": unit}
                         target_words.remove(word)
                     else:
                         # logger.warning("couldn't find numeric data for line.")
-                        df = pd.concat(
-                            [df, pd.DataFrame([{"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}])],
-                            ignore_index=True,
-                        )
+                        df.loc[len(df)] = {"Line": i + 1, "Word": word, "Value": 0, "Unit": 0}
                         target_words.remove(word)
                     matched_lines.add(i)
                     break  # Exit the inner loop once a match is found
@@ -2539,10 +2588,7 @@ def text_from_greyscale(input_image_obj, COL):
                 if match:
                     value = float(match.group(1).replace(' ', ''))
                     unit = match.group(4) if match.group(4) else ""
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": closest_word, "Value": value, "Unit": unit}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": closest_word, "Value": value, "Unit": unit}
                     target_words.remove(closest_word)
                 matched_lines.add(i)
 
@@ -2640,15 +2686,9 @@ def text_from_greyscale(input_image_obj, COL):
                 if match:
                     value = float(match.group(1).replace(' ', ''))
                     unit = match.group(4) if match.group(4) else ""
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": target_words[j], "Value": value, "Unit": unit}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": target_words[j], "Value": value, "Unit": unit}
                 else:
-                    df = pd.concat(
-                        [df, pd.DataFrame([{"Line": i + 1, "Word": target_words[j], "Value": 0, "Unit": 0}])],
-                        ignore_index=True,
-                    )
+                    df.loc[len(df)] = {"Line": i + 1, "Word": target_words[j], "Value": 0, "Unit": 0}
                 matched_lines.add(i)
 
                 # Remove the matched line from further consideration
@@ -2757,8 +2797,7 @@ def metric_check(df):
 
         # Add Missing Rows
         for target in missing_targets:
-            new_row = {"Word": target, "Value": 0, "Unit": ""}
-            df_in = pd.concat([df_in, pd.DataFrame([new_row])], ignore_index=True)
+            df_in.loc[len(df_in)] = {"Word": target, "Value": 0, "Unit": ""}
 
         return df_in
 
@@ -3106,8 +3145,7 @@ def metric_check_dv(df):
 
         # Add Missing Rows
         for target in missing_targets:
-            new_row = {"Word": target, "Value": 0, "Unit": ""}
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            df.loc[len(df)] = {"Word": target, "Value": 0, "Unit": ""}
 
         return df
 
