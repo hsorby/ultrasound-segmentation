@@ -1057,6 +1057,23 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
     numbers = list(numbers)
     positions = [list(p) for p in positions]
 
+    # Convert tick string values to float and drop any that cannot be parsed.
+    valid_numbers = []
+    valid_positions = []
+    for v, p in zip(numbers, positions):
+        try:
+            valid_numbers.append(float(v))
+            valid_positions.append(list(p))
+        except (ValueError, TypeError):
+            logger.warning(
+                "Axis validation for %s side: could not convert tick value '%s' to float; skipping this tick.",
+                side,
+                v,
+            )
+
+    numbers = valid_numbers
+    positions = valid_positions
+
     if len(numbers) < 2 or len(numbers) != len(positions):
         logger.warning(
             "Axis validation failed for %s side: insufficient or mismatched ticks "
@@ -1909,7 +1926,7 @@ def plot_correction(Xplot, Yplot, df):
         plt.xlabel("Time (s)")
         plt.ylabel("Flowrate (cm/s)")
     except Exception:
-        traceback.print_exc()
+        logger.warning("Could not plot time-scaled waveform; continuing.", exc_info=True)
 
     return df
 
