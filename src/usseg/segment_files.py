@@ -103,6 +103,9 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
             # DICOM files skip text extraction, but extract metadata
             logger.info(f"Processing DICOM file: {input_image_filename}")
             dicom_metadata = general_functions.extract_dicom_metadata(input_image_filename)
+            PIL_image, cv2_image = general_functions.extract_doppler_from_dicom(input_image_filename)
+            general_functions.debug_plot_doppler_overlay(PIL_image, dicom_metadata, ref_is_relative=True)
+
             Text_data.append(None)
             Fail = 0
         elif us_image:

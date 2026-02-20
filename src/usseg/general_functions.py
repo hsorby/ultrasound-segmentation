@@ -138,7 +138,7 @@ def extract_dicom_metadata(dicom_file_path):
             metadata["PhysicalDeltaY"] = get_tag((0x0018, 0x602E))
         else:
             metadata["pw_spectral_region_index"] = None
-            
+
         metadata["pw_spectral_region_index"] = pw_index
 
         return metadata
@@ -147,6 +147,75 @@ def extract_dicom_metadata(dicom_file_path):
         logger.error(f"Failed to extract DICOM metadata from {dicom_file_path}: {e}")
         return {}
 
+def extract_doppler_from_dicom(dicom_file_path):
+    """
+    Returns:
+        PIL_image (PIL.Image.Image)
+        cv2_image (np.ndarray)  # suitable for OpenCV (BGR for colour images)
+    """
+    ds = pydicom.dcmread(dicom_file_path)  # must read pixels
+    arr = ds.pixel_array  # numpy array
+
+    # Handle common cases: RGB (H,W,3) or MONOCHROME (H,W)
+    if arr.ndim == 3 and arr.shape[-1] == 3:
+        # pydicom gives RGB; PIL expects RGB; OpenCV expects BGR
+        PIL_image = Image.fromarray(arr.astype(np.uint8), mode="RGB")
+        cv2_image = arr[:, :, ::-1].astype(np.uint8)  # RGB -> BGR
+        return PIL_image, cv2_image
+
+    # Grayscale: ensure uint8
+    if arr.ndim == 2:
+        if arr.dtype != np.uint8:
+            # normalize to 0..255 (simple + safe default)
+            a = arr.astype(np.float32)
+            a -= a.min()
+            denom = (a.max() - a.min()) or 1.0
+            a = (a / denom * 255.0).astype(np.uint8)
+        else:
+            a = arr
+        PIL_image = Image.fromarray(a, mode="L")
+        cv2_image = a  # OpenCV grayscale
+        return PIL_image, cv2_image
+
+    raise ValueError(f"Unsupported pixel array shape: {arr.shape}, dtype={arr.dtype}")
+
+def debug_plot_doppler_overlay(PIL_image, metadata, ref_is_relative=True):
+    """
+    Plot Doppler image with:
+      - bounding box corners/outline
+      - reference pixel marker
+
+    ref_is_relative=True means ReferencePixelX0/Y0 are offsets from MinX0/MinY0
+    (common for USRegionSequence items).
+    """
+    img = np.array(PIL_image)
+
+    x0 = metadata.get("RegionLocationMinX0")
+    y0 = metadata.get("RegionLocationMinY0")
+    x1 = metadata.get("RegionLocationMaxX1")
+    y1 = metadata.get("RegionLocationMaxY1")
+    rx = metadata.get("ReferencePixelX0")
+    ry = metadata.get("ReferencePixelY0")
+
+    plt.figure()
+    plt.imshow(img)
+    plt.axis("off")
+
+    # Bounding box
+    if None not in (x0, y0, x1, y1):
+        plt.plot([x0, x1, x1, x0, x0], [y0, y0, y1, y1, y0], linewidth=2)
+        plt.scatter([x0, x1, x1, x0], [y0, y0, y1, y1], s=30)
+
+    # Reference pixel
+    if None not in (rx, ry):
+        if ref_is_relative and None not in (x0, y0):
+            rx_abs, ry_abs = x0 + rx, y0 + ry
+        else:
+            rx_abs, ry_abs = rx, ry
+        plt.scatter([rx_abs], [ry_abs], s=70, marker="x")
+        plt.text(rx_abs + 5, ry_abs + 5, "ref", fontsize=10)
+
+    plt.show()
 
 def initial_segmentation(input_image_obj):
     """
