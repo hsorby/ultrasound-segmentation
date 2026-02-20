@@ -2005,6 +2005,7 @@ def plot_digitized_data_dicom(dicom_metadata, top_curve_coords=None):
     Yplot = y_ref_phys + (row_pixels - y_ref) * dy
 
     plt.figure(2)
+    plt.clf()  # clear so each DICOM file gets a fresh plot (no accumulation from previous files)
     plt.plot(Xplot, Yplot, "-")
     plt.xlabel("Physical X (time or distance)")
     plt.ylabel("Physical Y (e.g. velocity)")
@@ -2013,9 +2014,14 @@ def plot_digitized_data_dicom(dicom_metadata, top_curve_coords=None):
 
 def waveform_metrics_from_digitized(Xplot, Yplot):
     """
-    Compute waveform metrics (PS, ED, S/D, RI, TAmax, PI) from digitized x,y data.
-    Used for DICOM where there is no text-extracted df; returns a DataFrame with
-    the same metric names and structure so downstream (Text_data, export) can use it.
+    Compute waveform metrics from digitized x,y: Peak systolic (PS), End diastolic (ED),
+    and metrics derived only from those: S/D, RI, TAmax. Used for DICOM; returns a
+    DataFrame with the same structure so downstream (Text_data, export, HTML) can use it.
+
+    Derived:
+      S/D   = PS / ED
+      RI    = (PS - ED) / PS   (resistive index)
+      TAmax = (PS + 2*ED) / 3  (time-averaged maximum)
 
     Args:
         Xplot (list of float): X coordinates (time or physical axis).
@@ -2023,7 +2029,7 @@ def waveform_metrics_from_digitized(Xplot, Yplot):
 
     Returns:
         pandas.DataFrame: Columns Line, Word, Value, Unit, Digitized Value.
-            One row per metric: PS, ED, S/D, RI, TA (TAmax), PI. Value and Digitized Value
+            One row per metric: PS, ED, S/D, RI, TA (TAmax). Value and Digitized Value
             are set to the computed value; Unit is empty.
     """
     columns = ["Line", "Word", "Value", "Unit", "Digitized Value"]
@@ -2033,7 +2039,6 @@ def waveform_metrics_from_digitized(Xplot, Yplot):
         return empty_df
 
     y = np.array(Yplot, dtype=float)
-    x = np.array(Xplot, dtype=float)
     if len(y) < 3:
         return empty_df
 
@@ -2071,11 +2076,16 @@ def waveform_metrics_from_digitized(Xplot, Yplot):
         SoverD = PS / ED
         RI = (PS - ED) / PS if PS != 0 else 0.0
         TAmax = (PS + 2 * ED) / 3.0
-        mean_y = float(statistics.mean(y))
-        PI = (PS - ED) / mean_y if mean_y != 0 else 0.0
 
-        words = ["PS", "ED", "S/D", "RI", "TA", "PI"]
-        values = [round(PS, 2), round(ED, 2), round(SoverD, 2), round(RI, 2), round(TAmax, 2), round(PI, 2)]
+        # Add peak/trough markers to figure 2 so the saved digitized image shows each beat
+        x = np.array(Xplot, dtype=float)
+        if len(x) == len(y):
+            plt.figure(2)
+            plt.plot(x[peaks], y[peaks], "x", color="C0", markersize=8, label="PS")
+            plt.plot(x[troughs], y[troughs], "x", color="C1", markersize=8, label="ED")
+
+        words = ["PS", "ED", "S/D", "RI", "TA"]
+        values = [round(PS, 2), round(ED, 2), round(SoverD, 2), round(RI, 2), round(TAmax, 2)]
         rows = [
             {"Line": i + 1, "Word": w, "Value": v, "Unit": "", "Digitized Value": v}
             for i, (w, v) in enumerate(zip(words, values))

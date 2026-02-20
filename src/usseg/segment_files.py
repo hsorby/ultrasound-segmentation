@@ -90,9 +90,12 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
     # Paths for HTML column 1 (plain scan): same as input for images; for DICOM, a saved PNG (browser can't show .dcm)
     scan_display_paths = []
 
-    for input_image_filename in filenames:  # Iterate through all file names and populate excel file
+    for idx, input_image_filename in enumerate(filenames):  # Iterate through all file names and populate excel file
         # input_image_filename = "E:/us-data-anon/0000/IHE_PDI/00003511/AA3A43F2/AAD8766D/0000371E\\EEEAE224.JPG"
         image_name = os.path.basename(input_image_filename)
+        base_name = image_name.partition(".")[0]
+        # Unique prefix so files with same basename (e.g. 001.dcm from different folders) don't overwrite
+        out_prefix = output_dir + f"{idx}_{base_name}"
         print(input_image_filename)
 
         # Classify file type for downstream handling (image vs DICOM)
@@ -110,7 +113,7 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
             dicom_metadata = general_functions.extract_dicom_metadata(input_image_filename)
             PIL_image, cv2_img = general_functions.extract_doppler_from_dicom(input_image_filename)
             # Save Doppler as PNG for HTML column 1 (raw .dcm bytes are not displayable as image in browser)
-            source_path = output_dir + image_name.partition(".")[0] + "_Source.png"
+            source_path = out_prefix + "_Source.png"
             PIL_image.save(source_path)
             scan_display_path = source_path
             Fail = 0
@@ -361,7 +364,7 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
             else:
                 col = None
 
-            Annotated_path = output_dir + image_name.partition(".")[0] + "_Annotated.png"
+            Annotated_path = out_prefix + "_Annotated.png"
             if col is not None:
                 fig1, ax1 = plt.subplots(1)
                 ax1.imshow(col)
@@ -390,7 +393,7 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
             else:
                 Text_data.append(None)
 
-            Digitized_path = output_dir + image_name.partition(".")[0] + "_Digitized.png"
+            Digitized_path = out_prefix + "_Digitized.png"
             plt.figure(2)
             plt.savefig(Digitized_path, dpi=900, bbox_inches="tight", pad_inches=0)
             Digitized_scans.append(Digitized_path)
