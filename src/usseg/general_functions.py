@@ -2258,6 +2258,83 @@ def plot_correction(Xplot, Yplot, df):
     return df
 
 
+def extract_dicom_label_text(cv2_img):
+    """
+    Extract vessel type (uterine/umbilical) and side (Rt/Lt) from yellow label text on the
+    left side of a DICOM Doppler image. Uses HSV yellow mask and OCR on top 2/3, left half.
+
+    Args:
+        cv2_img (np.ndarray): BGR or grayscale image from the DICOM (e.g. from extract_doppler_from_dicom).
+
+    Returns:
+        dict: {"vessel": "Uterine"|"Umbilical"|None, "side": "Rt"|"Lt"|None, "raw": str}
+    """
+    result = {"vessel": None, "side": None, "raw": ""}
+    if cv2_img is None or cv2_img.size == 0:
+        return result
+
+    img = np.asarray(cv2_img)
+    h, w = img.shape[0], img.shape[1]
+    # ROI: top 2/3 of height, left half of width (big yellow label lives there)
+    roi_top = int(h * 2 / 3)
+    roi_left = int(w / 2)
+
+    if img.ndim == 2:
+        gray = img
+        yellow_roi = gray[0:roi_top, 0:roi_left]
+    else:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        lower_yellow = np.array([1, 100, 100], dtype=np.uint8)
+        upper_yellow = np.array([200, 255, 255], dtype=np.uint8)
+        mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        yellow_text = cv2.bitwise_and(gray, gray, mask=mask)
+        yellow_roi = yellow_text[0:roi_top, 0:roi_left]
+
+    try:
+        text = pytesseract.image_to_string(yellow_roi, lang="eng", config="--oem 1 --psm 6")
+    except Exception as e:
+        logger.warning("DICOM label OCR failed: %s", e)
+        return result
+
+    text = (text or "").strip()
+    result["raw"] = text
+    # Use only letters and spaces for matching (exclude numbers and symbols)
+    text_letters_only = re.sub(r"[^a-zA-Z\s]", " ", text)
+    text_letters_only = re.sub(r"\s+", " ", text_letters_only).strip()
+    text_lower = text_letters_only.lower()
+    # Normalise common OCR substitutions (1 for i, 0 for o)
+    text_normalised = text_lower.replace("1", "i").replace("0", "o")
+
+    # Vessel: exact substring and whole-word only.
+    # Do not use "art"/"artery" – they appear in both uterine and umbilical artery labels.
+    if "uterine" in text_lower or "uterine" in text_normalised:
+        result["vessel"] = "Uterine"
+    elif (
+        "umbilical" in text_lower
+        or "umbilica" in text_lower
+        or "umblical" in text_lower
+        or "umbilical" in text_normalised
+        or re.search(r"\bumb\b", text_lower)
+        or "bilical" in text_lower
+        or "bilical" in text_normalised
+    ):
+        result["vessel"] = "Umbilical"
+
+    # Side: exact word boundaries only
+    if re.search(r"\blt\b", text_lower) or " left" in text_lower or text_lower.startswith("left"):
+        result["side"] = "Lt"
+    elif re.search(r"\brt\b", text_lower) or " right" in text_lower or text_lower.startswith("right"):
+        result["side"] = "Rt"
+
+    # Print extracted text and what we matched
+    label_str = " ".join(filter(None, [result["side"], result["vessel"]])) or "(none)"
+    print("[DICOM label] Extracted text:", repr(text_letters_only or text))
+    print("[DICOM label] Matched to:", label_str)
+
+    return result
+
+
 def scan_type_test(input_image_filename):
     """
     Function for yellow filtering an image and searching for a list of target words indicative of

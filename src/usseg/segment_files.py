@@ -12,6 +12,7 @@ import pickle
 import matplotlib.pyplot as plt
 import cv2
 import numpy as np
+import pandas as pd
 import traceback
 import toml
 
@@ -104,6 +105,7 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
         # is_image: jpeg, png, or other common image formats
         us_image = ext in (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp")
 
+        label_result = None  # DICOM only: vessel + side from yellow label text
         # Path to show in HTML column 1 (plain scan). For DICOM we save a PNG so the browser can display it.
         scan_display_path = input_image_filename
         if us_dicom:
@@ -116,6 +118,7 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
             source_path = out_prefix + "_Source.png"
             PIL_image.save(source_path)
             scan_display_path = source_path
+            label_result = general_functions.extract_dicom_label_text(cv2_img)
             Fail = 0
         elif us_image:
             try:  # Try text extraction
@@ -389,6 +392,18 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
                     continue
             elif us_dicom:
                 df = general_functions.waveform_metrics_from_digitized(Xplot, Yplot)
+                # Prepend label row (vessel + side) at top of table for HTML
+                if label_result and not df.empty:
+                    label_str = " ".join(
+                        filter(None, [label_result.get("side"), label_result.get("vessel")])
+                    ).strip()
+                    if label_str:
+                        label_row = pd.DataFrame(
+                            [{"Line": 0, "Word": "Label", "Value": label_str, "Unit": "", "Digitized Value": ""}],
+                            columns=df.columns,
+                        )
+                        df = pd.concat([label_row, df], ignore_index=True)
+                    df["Line"] = range(1, len(df) + 1)
                 Text_data.append(df)
             else:
                 Text_data.append(None)
