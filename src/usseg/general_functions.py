@@ -75,6 +75,79 @@ def execute_on_main_thread_and_wait(func, *args, **kwargs):
         return result
 
 
+def extract_dicom_metadata(dicom_file_path):
+    """Extract specific metadata from a DICOM file.
+    
+    Args:
+        dicom_file_path (str): Path to the DICOM file.
+    
+    Returns:
+        dict: Dictionary containing extracted DICOM metadata fields.
+    """
+    try:
+        ds = pydicom.dcmread(dicom_file_path, stop_before_pixels=True)
+        metadata = {}
+
+        # Step 1: get (0018,6011) Sequence of Ultrasound Regions
+        us_region_elem = ds.get((0x0018, 0x6011), None)
+        if us_region_elem is None:
+            metadata["us_region_sequence_present"] = False
+            return metadata
+
+        metadata["us_region_sequence_present"] = True
+        metadata["num_us_regions"] = len(us_region_elem.value)
+        # Step 2: find PW spectral region (RegionSpatialFormat=3, RegionDataType=3)
+        pw_index = None
+        for i, item in enumerate(us_region_elem.value):
+            rsf_elem = item.get((0x0018, 0x6012), None)  # Region Spatial Format
+            rdt_elem = item.get((0x0018, 0x6014), None)  # Region Data Type
+            rsf = rsf_elem.value if rsf_elem else None
+            rdt = rdt_elem.value if rdt_elem else None
+
+            if rsf == 3 and rdt == 3:
+                pw_index = i
+                break
+
+        if pw_index is not None:
+            pw_region = us_region_elem.value[pw_index]
+
+            def get_tag(tag):
+                elem = pw_region.get(tag, None)
+                return elem.value if elem else None
+
+            # Bounding box (pixel coords in full image)
+            metadata["RegionLocationMinX0"] = get_tag((0x0018, 0x6018))
+            metadata["RegionLocationMinY0"] = get_tag((0x0018, 0x601A))
+            metadata["RegionLocationMaxX1"] = get_tag((0x0018, 0x601C))
+            metadata["RegionLocationMaxY1"] = get_tag((0x0018, 0x601E))
+
+            # Reference pixel (offsets within the region, per your doc)
+            metadata["ReferencePixelX0"] = get_tag((0x0018, 0x6020))
+            metadata["ReferencePixelY0"] = get_tag((0x0018, 0x6022))
+
+            # Physical units codes
+            metadata["PhysicalUnitsXDirection"] = get_tag((0x0018, 0x6024))
+            metadata["PhysicalUnitsYDirection"] = get_tag((0x0018, 0x6026))
+
+            # Physical value at the reference pixel
+            metadata["ReferencePixelPhysicalValueX"] = get_tag((0x0018, 0x6028))
+            metadata["ReferencePixelPhysicalValueY"] = get_tag((0x0018, 0x602A))
+
+            # Physical delta per pixel step
+            metadata["PhysicalDeltaX"] = get_tag((0x0018, 0x602C))
+            metadata["PhysicalDeltaY"] = get_tag((0x0018, 0x602E))
+        else:
+            metadata["pw_spectral_region_index"] = None
+            
+        metadata["pw_spectral_region_index"] = pw_index
+
+        return metadata
+
+    except Exception as e:
+        logger.error(f"Failed to extract DICOM metadata from {dicom_file_path}: {e}")
+        return {}
+
+
 def initial_segmentation(input_image_obj):
     """
     Initial segmentation of an ultrasound image.

@@ -99,26 +99,38 @@ def segment(filenames=None, output_dir=None, pickle_path=None):
         # is_image: jpeg, png, or other common image formats
         us_image = ext in (".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tif", ".tiff", ".webp")
 
-        try:  # Try text extraction
-            colRGBA = Image.open(input_image_filename)  # These images are in RGBA form
-            # colRGBA = General_functions.upscale_to_fixed_longest_edge(colRGBA)  # upscale to longest edge
-            PIL_col = colRGBA.convert("RGB")  # We need RGB, so convert here. with PIL
-            cv2_img = cv2.imread(input_image_filename)  # with cv2.
-            # pix = (
-            #     col.load()
-            # )  # Loads a pixel access object, where pixel values can be edited
-
-            # from General_functions import Colour_extract, Text_from_greyscale
-            COL = general_functions.colour_extract_vectorized(PIL_col, [255, 255, 100], 95, 95)
-            logger.info("Done Colour extract")
-
-            Fail, df = general_functions.text_from_greyscale(cv2_img, COL)
-        except Exception:  # flat fail on 1
-            traceback.print_exc()  # prints the error message and traceback
-            logger.error("Failed Text extraction")
+        if us_dicom:
+            # DICOM files skip text extraction, but extract metadata
+            logger.info(f"Processing DICOM file: {input_image_filename}")
+            dicom_metadata = general_functions.extract_dicom_metadata(input_image_filename)
             Text_data.append(None)
             Fail = 0
-            pass
+        elif us_image:
+            try:  # Try text extraction
+                colRGBA = Image.open(input_image_filename)  # These images are in RGBA form
+                # colRGBA = General_functions.upscale_to_fixed_longest_edge(colRGBA)  # upscale to longest edge
+                PIL_col = colRGBA.convert("RGB")  # We need RGB, so convert here. with PIL
+                cv2_img = cv2.imread(input_image_filename)  # with cv2.
+                # pix = (
+                #     col.load()
+                # )  # Loads a pixel access object, where pixel values can be edited
+
+                # from General_functions import Colour_extract, Text_from_greyscale
+                COL = general_functions.colour_extract_vectorized(PIL_col, [255, 255, 100], 95, 95)
+                logger.info("Done Colour extract")
+
+                Fail, df = general_functions.text_from_greyscale(cv2_img, COL)
+            except Exception:  # flat fail on 1
+                traceback.print_exc()  # prints the error message and traceback
+                logger.error("Failed Text extraction")
+                Text_data.append(None)
+                Fail = 0
+                pass
+        else:
+            # Unknown file type
+            logger.warning(f"Unknown file type for {input_image_filename}, skipping text extraction")
+            Text_data.append(None)
+            Fail = 0
 
         try:  # Try initial segmentation
             segmentation_mask, Xmin, Xmax, Ymin, Ymax = general_functions.initial_segmentation(
