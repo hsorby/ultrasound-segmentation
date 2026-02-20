@@ -2043,31 +2043,71 @@ def waveform_metrics_from_digitized(Xplot, Yplot):
         return empty_df
 
     try:
-        peaks, _ = find_peaks(y)
-        troughs, _ = find_peaks(-y)
-        if len(troughs) == 0:
-            trough_widths = np.array([0.0])
-            mean_widths_troughs = 0.0
+        # --- Improved beat detection (with notch suppression) ---
+        x = np.array(Xplot, dtype=float)
+
+        # Light smoothing to suppress digitisation jaggies (robust, minimal distortion)
+        y_s = pd.Series(y).rolling(window=5, center=True, min_periods=1).median().to_numpy()
+
+        # Estimate sampling interval from X axis (seconds per sample if Xplot is time)
+        if len(x) >= 2:
+            dx = float(np.median(np.diff(x)))
         else:
-            trough_widths, _, _, _ = peak_widths(-y, troughs)
-            mean_widths_troughs = float(statistics.mean(trough_widths))
-        valid_troughs = [troughs[i] for i in range(len(troughs)) if trough_widths[i] > (mean_widths_troughs / 2)]
-        troughs = valid_troughs if valid_troughs else troughs
+            dx = 1.0
+        if not np.isfinite(dx) or dx <= 0:
+            dx = 1.0
+
+        # Plausible HR constraints -> minimum separation between systolic peaks
+        max_bpm = 200
+        min_sep_s = 60.0 / max_bpm
+        min_distance = max(1, int(min_sep_s / dx))
+
+        # Adaptive prominence threshold based on robust amplitude
+        amp = float(np.percentile(y_s, 95) - np.percentile(y_s, 5))
+        prom = 0.20 * amp  # 10% of amplitude; tune if needed
+        if not np.isfinite(prom) or prom <= 0:
+            prom = None  # let find_peaks decide if amplitude is degenerate
+
+        peaks, _ = find_peaks(y_s, distance=min_distance, prominence=prom)
 
         if len(peaks) == 0:
             return empty_df
-        results_half = peak_widths(y, peaks)
-        widths_of_peaks = results_half[0]
-        mean_widths_peaks = float(statistics.mean(widths_of_peaks))
-        mean_peak_y = float(statistics.mean(y[peaks]))
-        valid_peaks = [
-            peaks[i] for i in range(len(peaks))
-            if widths_of_peaks[i] > (mean_widths_peaks / 2) and y[peaks[i]] > (mean_peak_y * 0.8)
-        ]
-        peaks = valid_peaks if valid_peaks else peaks
 
-        if len(peaks) < 1 or len(troughs) < 1:
+        # Notch suppression: if multiple peaks occur within a beat window, keep only the tallest.
+        if len(peaks) >= 3:
+            median_pp = float(np.median(np.diff(x[peaks])))      # seconds (or X units)
+            merge_window_s = 0.45 * median_pp                    # 0.35–0.55 works well
+            merge_window_samples = max(1, int(merge_window_s / dx))
+        else:
+            merge_window_samples = min_distance
+
+        consolidated = []
+        i = 0
+        while i < len(peaks):
+            j = i
+            best = int(peaks[i])
+            while j + 1 < len(peaks) and (int(peaks[j + 1]) - int(peaks[j])) <= merge_window_samples:
+                j += 1
+                cand = int(peaks[j])
+                if y_s[cand] > y_s[best]:
+                    best = cand
+            consolidated.append(best)
+            i = j + 1
+
+        peaks = np.array(consolidated, dtype=int)
+
+        # End-diastolic troughs: minimum between consecutive peaks (more stable than find_peaks(-y))
+        trough_list = []
+        for i in range(len(peaks) - 1):
+            a, b = int(peaks[i]), int(peaks[i + 1])
+            if b > a + 1:
+                seg = y_s[a:b]
+                trough_list.append(a + int(np.argmin(seg)))
+        troughs = np.array(trough_list, dtype=int)
+
+        if len(troughs) == 0:
             return empty_df
+        # --- End improved beat detection ---
 
         PS = float(statistics.mean(y[peaks]))
         ED = float(statistics.mean(y[troughs]))
@@ -2078,7 +2118,6 @@ def waveform_metrics_from_digitized(Xplot, Yplot):
         TAmax = (PS + 2 * ED) / 3.0
 
         # Add peak/trough markers to figure 2 so the saved digitized image shows each beat
-        x = np.array(Xplot, dtype=float)
         if len(x) == len(y):
             plt.figure(2)
             plt.plot(x[peaks], y[peaks], "x", color="C0", markersize=8, label="PS")
