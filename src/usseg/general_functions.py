@@ -2911,6 +2911,15 @@ def text_from_greyscale(input_image_obj, COL):
     PIX = COL.load()
     img = input_image_obj
 
+    # Restrict text search to the right third of the image by zeroing
+    # everything left of 2/3 width. This is in addition to the existing
+    # vertical masking below.
+    width, height = COL.size
+    right_start = int(width * (2.0 / 3.0))
+    for y in range(height):
+        for x in range(right_start):
+            PIX[x, y] = (0, 0, 0)
+
     # 2. Apply slight Gaussian blur
     # smoothed_image = COL.filter(ImageFilter.GaussianBlur(radius=1)) # In some cases smoothing helps, in others it makes it worse?
 
@@ -2946,16 +2955,29 @@ def text_from_greyscale(input_image_obj, COL):
 
     def group_similar_numbers(y_center, tolerance, OCR_data):
         # This function groups indexes of words with similar y-coordinate center
-        # and also calculates the bounding box for each group of words
-        words = OCR_data["text"]
-        lefts = OCR_data["left"]
-        tops = OCR_data["top"]
-        widths = OCR_data["width"]
-        heights = OCR_data["height"]
+        # and also calculates the bounding box for each group of words.
+        #
+        # Empty / whitespace-only OCR entries are removed here so that they do
+        # not participate in line grouping or later matching.
+        valid_indices = [
+            i for i, t in enumerate(OCR_data["text"])
+            if t is not None and t != "" and t != " "
+        ]
+        if not valid_indices:
+            return [], []
+
+        words = [OCR_data["text"][i] for i in valid_indices]
+        lefts = [OCR_data["left"][i] for i in valid_indices]
+        tops = [OCR_data["top"][i] for i in valid_indices]
+        widths = [OCR_data["width"][i] for i in valid_indices]
+        heights = [OCR_data["height"][i] for i in valid_indices]
         x_centers = [left + width / 2 for left, width in zip(lefts, widths)]  # Calculate x_center for sorting
 
+        # Use the corresponding y_center entries for valid words only.
+        filtered_y_center = [y_center[i] for i in valid_indices]
+
         # Convert y_center to a numpy array and reshape for DBSCAN
-        data = np.array(y_center).reshape(-1, 1)
+        data = np.array(filtered_y_center).reshape(-1, 1)
 
         # Perform DBSCAN clustering on y-coordinates
         dbscan = DBSCAN(eps=tolerance, min_samples=2)
@@ -3130,7 +3152,7 @@ def text_from_greyscale(input_image_obj, COL):
     # Initialize DataFrame
     df = pd.DataFrame(columns=["Line", "Word", "Value", "Unit"])
 
-    prefixes = ["Lt", "Rt", "Umb", "DV"]
+    prefixes = ["Lt", "Rt", "Umb", "DV","MCA"]
     prefix_counts = {prefix: sum(1 for line in lines if prefix in line) for prefix in prefixes}
     most_likely_prefix = max(prefix_counts, key=prefix_counts.get)
 
@@ -3197,7 +3219,11 @@ def text_from_greyscale(input_image_obj, COL):
         closest_word = None
 
         for word in target_words:
-            distance = Levenshtein.distance(line, word)
+            # Compare only the prefix of the line up to the target word length,
+            # so trailing numbers/units (e.g. " — 27.35cm/s") do not affect
+            # the distance. Case and characters are preserved.
+            candidate = line[: len(word)]
+            distance = Levenshtein.distance(candidate, word)
             if distance < min_distance:
                 min_distance = distance
                 closest_word = word
@@ -3377,6 +3403,11 @@ def metric_check(df):
     Returns:
         - df (DataFrame): DataFrame with corrected values after metric checking calculations
     """
+
+    # Preserve raw, pre-correction metric values in a separate column so that
+    # the main "Value" field can be corrected without losing the originals.
+    if "Raw Value" not in df.columns:
+        df["Raw Value"] = df["Value"]
 
     def identify_prefix(lines):
         # Try to identify the prefix in use
@@ -3752,6 +3783,11 @@ def metric_check_dv(df):
     Returns:
         df(DataFrame): DataFrame with corrected values after metric checking calculations
     """
+
+    # Preserve raw, pre-correction DV metric values in a separate column so
+    # that the main "Value" field can be corrected without losing originals.
+    if "Raw Value" not in df.columns:
+        df["Raw Value"] = df["Value"]
 
     # Splitting the target words based on prefixes
     def add_missing_rows(df):
