@@ -934,12 +934,12 @@ def search_for_labels(
             ROIAX = thresholded_image[
                     int(Left_dimensions[2]): int(Left_dimensions[3]),
                     int(Left_dimensions[0]): int(Left_dimensions[0] + TYLshift),
-                    ]  # Right ROI
+                    ]  # Left axis ROI
         elif Side == "Right":
             ROIAX = thresholded_image[
                     int(Right_dimensions[2]): int(Right_dimensions[3]),
                     int(Right_dimensions[0] + TYLshift): int(Right_dimensions[1]),
-                    ]  # Left ROI
+                    ]  # Right axis ROI
 
         extracted_text_data = pytesseract.image_to_data(
             ROIAX,
@@ -962,14 +962,13 @@ def search_for_labels(
         if retry == 0:
             break
 
-    # d = pytesseract.image_to_data(
-    #     ROIAX,
-    #     output_type=Output.DICT,
-    #     config="--psm 11 -c tessedit_char_whitelist=-0123456789",
-    # )
+    # Build label candidates: (text, box centre) pairs, dropping "" and "-" together
     n_boxes = len(extracted_text_data["level"])
-    CenBox = []  # Initialise variable to populate with box center coords
+    CenBox = []      # centres of boxes to keep
+    label_texts = [] # texts for boxes to keep
     for i in range(1, n_boxes):  # dont start from 0 as the first index is redundant
+        txt_val = extracted_text_data["text"][i]
+
         if Side == "Left":
             (x, y, wi, h) = (
                 extracted_text_data["left"][i],
@@ -985,25 +984,36 @@ def search_for_labels(
                 extracted_text_data["height"][i],
             )  # define (Xleft, Ytop, width, height) of each object from the dictionary
 
+        # De-duplicate Tesseract repeated rows
         o = i / 4  # we get 4 repeats for each real box, so this reduces that to 1.
-        if o.is_integer():
-            if Side == "Left":
-                CenBox.append(
-                    [
-                        (extracted_text_data["left"][i] + (extracted_text_data["width"][i] / 2)),
-                        (extracted_text_data["top"][i] + (extracted_text_data["height"][i] / 2)),
-                    ]
-                )  # calculate the center point of each bounding box
-            elif Side == "Right":
-                CenBox.append(
-                    [
-                        (extracted_text_data["left"][i] + TYLshift + (extracted_text_data["width"][i] / 2)),
-                        (extracted_text_data["top"][i] + (extracted_text_data["height"][i] / 2)),
-                    ]
-                )  # calculate the center point of each bounding box
+        if not o.is_integer():
+            continue
+
+        # Drop empty/standalone minus labels together with their boxes so that
+        # numbers and positions stay aligned.
+        if txt_val == "" or txt_val == "-":
+            continue
+
+        if Side == "Left":
+            CenBox.append(
+                [
+                    (extracted_text_data["left"][i] + (extracted_text_data["width"][i] / 2)),
+                    (extracted_text_data["top"][i] + (extracted_text_data["height"][i] / 2)),
+                ]
+            )  # calculate the center point of each bounding box
+        elif Side == "Right":
+            CenBox.append(
+                [
+                    (extracted_text_data["left"][i] + TYLshift + (extracted_text_data["width"][i] / 2)),
+                    (extracted_text_data["top"][i] + (extracted_text_data["height"][i] / 2)),
+                ]
+            )  # calculate the center point of each bounding box
+
+        label_texts.append(txt_val)
+
         cv2.rectangle(
             ROI3, (x, y), (x + wi, y + h), (255), 2
-        )  # Draw the rectangles on the ROI
+        )  # Draw the rectangles on the ROI for retained labels
 
     for i in range(0, len(CenBox)):
         dists = cdist([CenBox[i]], CenBox)
@@ -1152,10 +1162,9 @@ def search_for_labels(
         pattern = r'(-?\d+)-$'
         return re.sub(pattern, r'\1', s)
 
-    number = []
-    for i in range(len(extracted_text_data["text"])):
-        if extracted_text_data["text"][i] != "" and extracted_text_data["text"][i] != "-":
-            number.append(correct_number_format(extracted_text_data["text"][i]))
+    # Final numbers are derived directly from label_texts so they stay aligned
+    # with CenBox/positions.
+    number = [correct_number_format(s) for s in label_texts]
 
     empty_to_fill = np.zeros((image.shape[0], image.shape[1]))
 
