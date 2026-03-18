@@ -39,6 +39,7 @@ from pstats import SortKey
 
 # Module imports
 import toml
+import logging
 
 # Local imports
 import usseg
@@ -81,6 +82,9 @@ def main(root_dir):
 
 
 if __name__ == "__main__":
+    # Ensure INFO-level logs (including general_functions debug) are visible
+    logging.basicConfig(level=logging.INFO)
+
     config_root_dir = toml.load("config.toml")["root_dir"]
     # root_dir = "Path/to/a/folder/of/images"
     main(config_root_dir)
