@@ -3145,6 +3145,22 @@ def text_from_greyscale(input_image_obj, COL):
         "DV-PLI",
         "DV-PVIV",
         "DV-HR",
+        "Lt MCA-PS",
+        "Lt MCA-ED",
+        "Lt MCA-S/D",
+        "Lt MCA-PI",
+        "Lt MCA-RI",
+        "Lt MCA-MD",
+        "Lt MCA-TAmax",
+        "Lt MCA-HR",
+        "Rt MCA-PS",
+        "Rt MCA-ED",
+        "Rt MCA-S/D",
+        "Rt MCA-PI",
+        "Rt MCA-RI",
+        "Rt MCA-MD",
+        "Rt MCA-TAmax",
+        "Rt MCA-HR",
     ]
 
     # Split text into lines
@@ -3152,7 +3168,7 @@ def text_from_greyscale(input_image_obj, COL):
     # Initialize DataFrame
     df = pd.DataFrame(columns=["Line", "Word", "Value", "Unit"])
 
-    prefixes = ["Lt", "Rt", "Umb", "DV","MCA"]
+    prefixes = ["Lt Ut", "Rt Ut", "Umb", "DV","Rt MCA","Lt MCA"]
     prefix_counts = {prefix: sum(1 for line in lines if prefix in line) for prefix in prefixes}
     most_likely_prefix = max(prefix_counts, key=prefix_counts.get)
 
@@ -3232,10 +3248,14 @@ def text_from_greyscale(input_image_obj, COL):
 
     # Set a threshold for acceptable similarity
     threshold = 7
+    exact_match_count = 0
 
     for i, line in enumerate(lines):
         if i not in matched_lines:  # only process unmatched lines
             closest_word, distance = find_closest_target(line, target_words)
+
+            if distance == 0:
+                exact_match_count += 1
 
             if distance <= threshold:
                 # Extract value and unit
@@ -3246,6 +3266,14 @@ def text_from_greyscale(input_image_obj, COL):
                     df.loc[len(df)] = {"Line": i + 1, "Word": closest_word, "Value": value, "Unit": unit}
                     target_words.remove(closest_word)
                 matched_lines.add(i)
+
+    # If no line matched any target word exactly (distance == 0), flag it – this
+    # is a strong indicator that the prefix matching is off for this scan.
+    if exact_match_count == 0:
+        logger.warning(
+            "Metric OCR: no exact prefix matches between OCR lines and target words; "
+            "metric labels may be misaligned."
+        )
 
     target_words_extended = [
         "Lt Ut-PS cm/s",
