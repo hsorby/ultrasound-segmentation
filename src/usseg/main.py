@@ -83,7 +83,13 @@ def main(root_dir):
 
 if __name__ == "__main__":
     # Ensure INFO-level logs (including general_functions debug) are visible
-    logging.basicConfig(level=logging.INFO)
+    # and persist to a local log file when running main.py directly.
+    logging.basicConfig(
+        level=logging.INFO,
+        filename="batch_main.log",
+        filemode="a",
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    )
 
     config_root_dir = toml.load("config.toml")["root_dir"]
     # root_dir = "Path/to/a/folder/of/images"

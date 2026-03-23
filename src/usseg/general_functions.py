@@ -1217,7 +1217,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
             valid_numbers.append(float(v))
             valid_positions.append(list(p))
         except (ValueError, TypeError):
-            logger.warning(
+            logger.info(
                 "Axis validation for %s side: could not convert tick value '%s' to float; skipping this tick.",
                 side,
                 v,
@@ -1227,7 +1227,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
     positions = valid_positions
 
     if len(numbers) < 2 or len(numbers) != len(positions):
-        logger.warning(
+        logger.info(
             "Axis validation failed for %s side: insufficient or mismatched ticks "
             "(%d values, %d positions).",
             side,
@@ -1301,7 +1301,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
                         to_drop.add(j)
                 else:
                     # Conflicting labels at same y: drop the entire cluster.
-                    logger.warning(
+                    logger.info(
                         "Axis validation for %s side: conflicting tick values %s at shared y=%s; "
                         "dropping all ticks at this y.",
                         side,
@@ -1313,7 +1313,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
 
             if to_drop:
                 for j in sorted(to_drop, reverse=True):
-                    logger.warning(
+                    logger.info(
                         "Axis validation for %s side: removing tick value %s at index %d (duplicate-y cleanup).",
                         side,
                         ordered_vals[j],
@@ -1387,7 +1387,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
                 drop_idx = None
 
             if drop_idx is not None:
-                logger.warning(
+                logger.info(
                     "Axis validation for %s side: removing suspect endpoint tick value %s at index %d "
                     "for validation purposes (slopes=%s, cluster_rep=%0.3f)",
                     side,
@@ -1404,7 +1404,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
         # If exactly two consecutive bad slopes, drop the interior tick between them
         if len(bad_indices) == 2 and bad_indices[1] == bad_indices[0] + 1:
             drop_idx = bad_indices[0] + 1  # index of the middle tick
-            logger.warning(
+            logger.info(
                 "Axis validation for %s side: removing suspect tick value %s at index %d "
                 "for validation purposes (slopes=%s, cluster_rep=%0.3f)",
                 side,
@@ -1444,7 +1444,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
 
                 # Drop in descending index order so indices remain valid
                 for drop_idx in sorted({mid_tick, endpoint_tick}, reverse=True):
-                    logger.warning(
+                    logger.info(
                         "Axis validation for %s side: removing suspect tick value %s at index %d "
                         "(three-bad-slopes pattern, slopes=%s, cluster_rep=%0.3f)",
                         side,
@@ -1458,8 +1458,7 @@ def validate_axis_ticks(numbers, positions, side, spacing_tol=0.2):
                     idxs.pop(drop_idx)
                 continue
 
-        # If we reach here with remaining bad slopes, we can't safely decide which
-        # tick(s) to drop without risking over-aggressive correction.
+        # If bad slopes remain, we can't safely decide which tick(s) to drop.
         logger.warning(
             "Axis validation warning for %s side: inconsistent value-per-pixel slopes "
             "(cluster_rep=%0.3f, slopes=%s); unable to unambiguously identify bad ticks.",
@@ -2510,10 +2509,13 @@ def extract_dicom_label_text(cv2_img):
     elif re.search(r"\brt\b", text_lower) or " right" in text_lower or text_lower.startswith("right"):
         result["side"] = "Rt"
 
-    # Print extracted text and what we matched
+    # Log extracted text and what is matched for DICOM labels
     label_str = " ".join(filter(None, [result["side"], result["vessel"]])) or "(none)"
-    print("[DICOM label] Extracted text:", repr(text_letters_only or text))
-    print("[DICOM label] Matched to:", label_str)
+    logger.info(
+        "DICOM label OCR extracted text %s; matched label %s",
+        repr(text_letters_only or text),
+        label_str,
+    )
 
     return result
 
@@ -3175,7 +3177,7 @@ def text_from_greyscale(input_image_obj, COL):
     # Filter target words based on the most likely prefix
     target_words = [word for word in target_words if word.startswith(most_likely_prefix)]
     word_order = [word for word in target_words if word.startswith(most_likely_prefix)]
-    target_word_mem = target_words.copy()
+
     # Step 1: Exact matching
     matched_lines = set()  # to store the indices of lines that have been matched
 
@@ -3230,6 +3232,14 @@ def text_from_greyscale(input_image_obj, COL):
                     matched_lines.add(i)
                     break  # Exit the inner loop once a match is found
 
+    # If no line matched any target word exactly (distance == 0), flag it – this
+    # is a strong indicator that the prefix matching is off for this scan.
+    if not matched_lines:
+        logger.warning(
+            "Metric OCR: no exact prefix matches between OCR lines and target words; "
+            "metric labels may be misaligned."
+        )
+
     def find_closest_target(line, target_words):
         min_distance = float('inf')
         closest_word = None
@@ -3248,14 +3258,11 @@ def text_from_greyscale(input_image_obj, COL):
 
     # Set a threshold for acceptable similarity
     threshold = 7
-    exact_match_count = 0
 
+    # Step 3: Closest target word matching for unmatched lines
     for i, line in enumerate(lines):
         if i not in matched_lines:  # only process unmatched lines
             closest_word, distance = find_closest_target(line, target_words)
-
-            if distance == 0:
-                exact_match_count += 1
 
             if distance <= threshold:
                 # Extract value and unit
@@ -3267,13 +3274,7 @@ def text_from_greyscale(input_image_obj, COL):
                     target_words.remove(closest_word)
                 matched_lines.add(i)
 
-    # If no line matched any target word exactly (distance == 0), flag it – this
-    # is a strong indicator that the prefix matching is off for this scan.
-    if exact_match_count == 0:
-        logger.warning(
-            "Metric OCR: no exact prefix matches between OCR lines and target words; "
-            "metric labels may be misaligned."
-        )
+
 
     target_words_extended = [
         "Lt Ut-PS cm/s",
@@ -3389,7 +3390,7 @@ def text_from_greyscale(input_image_obj, COL):
                 temp = df.loc[df['Word'] == 'DV-S/a', 'Value'].values[0]
                 df.loc[df['Word'] == 'DV-S/a', 'Value'] = df.loc[df['Word'] == 'DV-S', 'Value'].values[0]
                 df.loc[df['Word'] == 'DV-S', 'Value'] = temp
-                print("swapped DV-S/a and DV-S")
+                logger.info("Metric DV: swapped DV-S/a and DV-S values")
 
             if df.loc[df['Word'] == 'DV-a/S', 'Unit'].values[0] != '' and df.loc[df['Word'] == 'DV-a', 'Unit'].values[0] == '':
                 # Storing temporary values for swapping
@@ -3403,8 +3404,8 @@ def text_from_greyscale(input_image_obj, COL):
             df = metric_check_dv(df)  # handle the ductus venousus differently
         else:
             df = metric_check(df)  # for left, right, and umbilical
-    except:
-        print("metric check failed")
+    except Exception:
+        logger.exception("Metric check failed for uterine/umbilical metrics")
 
     # Enforce positive heart-rate values: OCR occasionally hallucinates a leading '-'
     if not df.empty and 'Value' in df.columns and 'Word' in df.columns:
@@ -3441,7 +3442,7 @@ def metric_check(df):
         # Try to identify the prefix in use
         for prefix in ["Lt", "Rt", "Umb"]:
             if lines['Word'].str.contains(prefix).any():
-                print("prefix found")
+                logger.info("Metric prefix detected %s", prefix)
                 PRF = prefix
 
             target_words = [
@@ -3673,7 +3674,7 @@ def metric_check(df):
                     desired_row_name = parts[1] + '_from_' + parts[2]
                     new_value = comparison_dataframe.loc[desired_row_name, 'Third_calc']
                     # We have calculated the new PS!
-                    print(f"Recalculated PS (from RI): {new_value}")
+                    logger.info("Metric OCR: recalculated PS from RI as %s", new_value)
                     df.loc[df['Word'].str.contains('PS'), 'Value'] = round(new_value, 2)
                     PS = df.loc[df['Word'].str.contains('PS'), 'Value'].values[0]
                     ED = df.loc[df['Word'].str.contains('ED'), 'Value'].values[0]
@@ -3692,7 +3693,7 @@ def metric_check(df):
                 desired_row_name = parts[1] + '_from_' + parts[2]
                 new_value = comparison_dataframe.loc[desired_row_name, 'Second_calc']
                 # We have calculated the new PS!
-                print(f"Recalculated PS (from RI): {new_value}")
+                logger.info("Metric OCR: recalculated ED from RI as %s", new_value)
                 df.loc[df['Word'].str.contains('ED'), 'Value'] = round(new_value, 2)
                 PS = df.loc[df['Word'].str.contains('PS'), 'Value'].values[0]
                 ED = df.loc[df['Word'].str.contains('ED'), 'Value'].values[0]
@@ -3705,11 +3706,11 @@ def metric_check(df):
 
 
         except ZeroDivisionError:
-            print("Error: Division by zero encountered. Check the extracted values.")
+            logger.error("Metric OCR: division by zero encountered while checking uterine/umbilical metrics")
     elif len(conditions_met) < 3:
         # At least 1 of the metrics is consistent, therefore PS and ED can be assumed to be correct,
-        # Caclulate the inconsistent metrics from the PS and ED calculations
-        print("At least one text extraction error, correcting...")
+        # Calculate the inconsistent metrics from the PS and ED calculations
+        logger.warning("Metric OCR: at least one text extraction error, correcting uterine/umbilical metrics")
 
         if 'SoverD' not in conditions_met:
             # Find S/D
@@ -3721,7 +3722,7 @@ def metric_check(df):
             # Find TAmax
             df.loc[df['Word'].str.contains('TAmax'), 'Value'] = round((PS + (2 * ED)) / 3, 2)
     else:
-        print("All metrics are consistent.")
+        logger.info("Metric OCR: all uterine/umbilical metrics are self-consistent")
 
     return df
 
@@ -3969,10 +3970,10 @@ def metric_check_dv(df):
 
     try:
         conditions_met = metric_comparison(comparison_dataframe, 1)
-        print("ok")
-    except:
+        logger.info("Metric OCR: metric comparison completed successfully")
+    except Exception:
         conditions_met = None
-        traceback.print_exc()
+        logger.exception("Metric OCR: metric comparison failed")
 
     # You've already extracted PS, Sovera_extracted, RI_extracted, and TAmax_extracted
 
@@ -4034,7 +4035,7 @@ def metric_check_dv(df):
                     desired_row_name = parts[1] + '_from_' + parts[2]
                     new_value = comparison_dataframe.loc[desired_row_name, 'Third_calc']
                     # We have calculated the new PS!
-                    print(f"Recalculated PS (from PI): {new_value}")
+                    logger.info("Metric OCR DV: recalculated PS from PI as %s", new_value)
                     df.loc[df['Word'] == 'DV-S', 'Value'] = new_value
                     PS = df.loc[df['Word'] == 'DV-S', 'Value'].values[0]
                     a = df.loc[df['Word'] == 'DV-a', 'Value'].values[0]
@@ -4053,7 +4054,7 @@ def metric_check_dv(df):
                 desired_row_name = parts[1] + '_from_' + parts[2]
                 new_value = comparison_dataframe.loc[desired_row_name, 'Second_calc']
                 # We have calculated the new PS!
-                print(f"Recalculated PS (from PI): {new_value}")
+                logger.info("Metric OCR DV: recalculated a from PI as %s", new_value)
                 df.loc[df['Word'] == 'DV-a', 'Value'] = round(new_value, 2)
                 PS = df.loc[df['Word'] == 'DV-S', 'Value'].values[0]
                 a = df.loc[df['Word'] == 'DV-a', 'Value'].values[0]
@@ -4065,11 +4066,11 @@ def metric_check_dv(df):
                 df.loc[df['Word'] == 'DV-TAmax', 'Value'] = round((PS + (2 * a)) / 3, 2)
 
         except ZeroDivisionError:
-            print("Error: Division by zero encountered. Check the extracted values.")
+            logger.error("Metric OCR DV: division by zero encountered while checking DV metrics")
     elif len(conditions_met) < 3:
         # At least 1 of the metrics is consistent, therefore PS and a can be assumed to be correct,
         # Calculate the inconsistent metrics from the PS and a calculations
-        print("At least one text extraction error, correcting...")
+        logger.warning("Metric OCR DV: at least one text extraction error, correcting DV metrics")
 
         if 'Sovera' not in conditions_met:
             # Find S/a
@@ -4082,6 +4083,6 @@ def metric_check_dv(df):
             # Find TAmax
             df.loc[df['Word'] == 'DV-TAmax', 'Value'] = round((PS + (2 * a)) / 3, 2)
     else:
-        print("All metrics are consistent.")
+        logger.info("Metric OCR DV: all DV metrics are self-consistent")
 
     return df
