@@ -3167,6 +3167,107 @@ def text_from_greyscale(input_image_obj, COL):
 
     # Split text into lines
     lines = grouped_words  # text.split("\n")
+
+    def refine_hr_from_local_roi(df_in, lines_in, bboxes_in, col_img):
+        """Re-read HR from a local ROI around the first-pass HR line.
+
+        Uses first-pass matched HR line index -> line bounding box -> expanded ROI.
+        Then runs a lightweight deterministic OCR pass focused on HR text.
+        """
+        if df_in is None or df_in.empty or "Word" not in df_in.columns or "Line" not in df_in.columns:
+            return df_in
+
+        hr_rows = df_in.index[df_in["Word"].str.contains("HR", na=False)].tolist()
+        if not hr_rows:
+            return df_in
+
+        row_idx = hr_rows[0]
+        line_number = df_in.loc[row_idx, "Line"]
+        if pd.isna(line_number):
+            return df_in
+        line_idx = int(line_number) - 1
+        if line_idx < 0 or line_idx >= len(lines_in) or line_idx >= len(bboxes_in):
+            return df_in
+
+        box = bboxes_in[line_idx]
+        x1, y1 = box["top_left"]
+        x2, y2 = box["bottom_right"]
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+
+        # Expand ROI around first-pass HR line and clamp to image bounds.
+        pad_x = max(15, int(0.35 * width))
+        pad_y = max(10, int(0.80 * height))
+        img_w, img_h = col_img.size
+        rx1 = max(0, x1 - pad_x)
+        ry1 = max(0, y1 - pad_y)
+        rx2 = min(img_w, x2 + pad_x)
+        ry2 = min(img_h, y2 + pad_y)
+        if rx2 <= rx1 or ry2 <= ry1:
+            return df_in
+
+        roi = col_img.crop((rx1, ry1, rx2, ry2))
+        roi_np = np.array(roi)
+        if roi_np.size == 0:
+            return df_in
+
+        # Lightweight deterministic enhancement.
+        if roi_np.ndim == 3:
+            gray = cv2.cvtColor(roi_np, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = roi_np
+        gray = cv2.equalizeHist(gray)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thr = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        up = cv2.resize(thr, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+
+        # Restrict extraction to HR-like tokens/lines.
+        txt = pytesseract.image_to_string(
+            up, lang="eng", config="--oem 1 --psm 7 -c tessedit_char_whitelist=HRhr0123456789./- bpmBPM"
+        )
+        txt_norm = re.sub(r"\s+", " ", (txt or "").strip())
+        if "HR" not in txt_norm.upper():
+            txt2 = pytesseract.image_to_string(
+                up, lang="eng", config="--oem 1 --psm 6 -c tessedit_char_whitelist=HRhr0123456789./- bpmBPM"
+            )
+            txt2_norm = re.sub(r"\s+", " ", (txt2 or "").strip())
+            if "HR" in txt2_norm.upper():
+                txt_norm = txt2_norm
+            else:
+                return df_in
+
+        # Parse HR value from local ROI text.
+        matches = re.findall(r"(\d{2,3}(?:\.\d+)?)", txt_norm)
+        if not matches:
+            return df_in
+        refined_candidates = [float(m) for m in matches]
+        refined_candidates = [v for v in refined_candidates if 20 <= v <= 240]
+        if not refined_candidates:
+            return df_in
+        hr_refined = refined_candidates[0]
+
+        current_val = df_in.loc[row_idx, "Value"] if "Value" in df_in.columns else None
+
+        def _hr_implausible(v):
+            return v is None or pd.isna(v) or (not np.isfinite(float(v))) or float(v) < 20 or float(v) > 240
+
+        if _hr_implausible(current_val):
+            df_in.loc[row_idx, "Value"] = round(hr_refined, 2)
+            if "Unit" in df_in.columns and (pd.isna(df_in.loc[row_idx, "Unit"]) or df_in.loc[row_idx, "Unit"] in ("", 0)):
+                df_in.loc[row_idx, "Unit"] = "bpm"
+            logger.warning(
+                "hr_refine: replaced implausible/missing first-pass HR with local ROI OCR value %s",
+                round(hr_refined, 2),
+            )
+        else:
+            current_val_f = float(current_val)
+            if abs(current_val_f - hr_refined) > 3:
+                logger.warning(
+                    "hr_refine: first-pass HR (%s) disagrees with local ROI OCR (%s); keeping first-pass value",
+                    round(current_val_f, 2),
+                    round(hr_refined, 2),
+                )
+        return df_in
     # Initialize DataFrame
     df = pd.DataFrame(columns=["Line", "Word", "Value", "Unit"])
 
@@ -3407,6 +3508,11 @@ def text_from_greyscale(input_image_obj, COL):
     except Exception:
         logger.exception("Metric check failed for uterine/umbilical metrics")
 
+    try:
+        df = refine_hr_from_local_roi(df, lines, bounding_boxes, COL)
+    except Exception:
+        logger.exception("hr_refine: local HR refinement failed")
+
     # Enforce positive heart-rate values: OCR occasionally hallucinates a leading '-'
     if not df.empty and 'Value' in df.columns and 'Word' in df.columns:
         hr_mask = df['Word'].str.contains('HR', na=False) & df['Value'].notna()
@@ -3439,42 +3545,63 @@ def metric_check(df):
         df["Raw Value"] = df["Value"]
 
     def identify_prefix(lines):
-        # Try to identify the prefix in use
-        for prefix in ["Lt", "Rt", "Umb"]:
-            if lines['Word'].str.contains(prefix).any():
-                logger.info("Metric prefix detected %s", prefix)
-                PRF = prefix
+        # Keep this list aligned with the OCR metric labels used in text extraction.
+        target_words = [
+            "Lt Ut-PS",
+            "Lt Ut-ED",
+            "Lt Ut-S/D",
+            "Lt Ut-PI",
+            "Lt Ut-RI",
+            "Lt Ut-MD",
+            "Lt Ut-TAmax",
+            "Lt Ut-HR",
+            "Rt Ut-PS",
+            "Rt Ut-ED",
+            "Rt Ut-S/D",
+            "Rt Ut-PI",
+            "Rt Ut-RI",
+            "Rt Ut-MD",
+            "Rt Ut-TAmax",
+            "Rt Ut-HR",
+            "Umb-PS",
+            "Umb-ED",
+            "Umb-S/D",
+            "Umb-PI",
+            "Umb-RI",
+            "Umb-MD",
+            "Umb-TAmax",
+            "Umb-HR",
+            "Lt MCA-PS",
+            "Lt MCA-ED",
+            "Lt MCA-S/D",
+            "Lt MCA-PI",
+            "Lt MCA-RI",
+            "Lt MCA-MD",
+            "Lt MCA-TAmax",
+            "Lt MCA-HR",
+            "Rt MCA-PS",
+            "Rt MCA-ED",
+            "Rt MCA-S/D",
+            "Rt MCA-PI",
+            "Rt MCA-RI",
+            "Rt MCA-MD",
+            "Rt MCA-TAmax",
+            "Rt MCA-HR",
+        ]
+        valid_prefixes = ["Lt Ut", "Rt Ut", "Umb", "Lt MCA", "Rt MCA"]
+        prf = None
+        for prefix in valid_prefixes:
+            if lines["Word"].str.contains(prefix, regex=False).any():
+                prf = prefix
+                break
 
-            target_words = [
-                "Lt Ut-PS",
-                "Lt Ut-ED",
-                "Lt Ut-S/D",
-                "Lt Ut-PI",
-                "Lt Ut-RI",
-                "Lt Ut-MD",
-                "Lt Ut-TAmax",
-                "Lt Ut-HR",
-                "Rt Ut-PS",
-                "Rt Ut-ED",
-                "Rt Ut-S/D",
-                "Rt Ut-PI",
-                "Rt Ut-RI",
-                "Rt Ut-MD",
-                "Rt Ut-TAmax",
-                "Rt Ut-HR",
-                "Umb-PS",
-                "Umb-ED",
-                "Umb-S/D",
-                "Umb-PI",
-                "Umb-RI",
-                "Umb-MD",
-                "Umb-TAmax",
-                "Umb-HR",
-            ]
-        # Splitting the target words based on prefixes
-        target_words = [word for word in target_words if word.startswith(PRF)]
+        if prf is None:
+            logger.warning("metric_check: metric prefix could not be detected; keeping extracted rows as-is")
+            return None, []
 
-        return PRF, target_words  # Return None if no known prefix is found
+        logger.info("metric_check: metric prefix detected %s", prf)
+        filtered_target_words = [word for word in target_words if word.startswith(prf)]
+        return prf, filtered_target_words
 
     def add_missing_rows(df_in):
         # Identify the Prefix
@@ -3492,7 +3619,7 @@ def metric_check(df):
 
     #df = add_missing_rows(df)
 
-    def check_TAmax_value(value_in, df_in):  # Decimal can be misread, so common sense check.
+    def normalize_tamax_sign(value_in, df_in):  # Flip TAmax sign only when TAmax is negative but MD, PS, and ED are all positive.
 
         MD = df_in.loc[df['Word'].str.contains('MD'), 'Value'].values[0] if df_in['Word'].str.contains('MD').any() else 0
         PS = df_in.loc[df['Word'].str.contains('PS'), 'Value'].values[0] if df_in['Word'].str.contains('PS').any() else 0
@@ -3508,14 +3635,14 @@ def metric_check(df):
     PI = df.loc[df['Word'].str.contains('PI'), 'Value'].values[0] if df['Word'].str.contains('PI').any() else 0
     df.loc[df['Word'].str.contains('PI'), 'Value'] = check_pi_value(PI)
     TAmax = df.loc[df['Word'].str.contains('TAmax'), 'Value'].values[0] if df['Word'].str.contains('TAmax').any() else 0
-    df.loc[df['Word'].str.contains('TAmax'), 'Value'] = check_TAmax_value(TAmax, df)
+    df.loc[df['Word'].str.contains('TAmax'), 'Value'] = normalize_tamax_sign(TAmax, df)
 
     # Peak systolic
     PS = df.loc[df['Word'].str.contains('PS'), 'Value'].values[0] if df['Word'].str.contains('PS').any() else 0
     # End diastolic
     ED = df.loc[df['Word'].str.contains('ED'), 'Value'].values[0] if df['Word'].str.contains('ED').any() else 0
 
-    def check_TAmax_value(PS, ED, df):  # Decimal can be misread, so common sense check.
+    def normalize_ps_ed_values(PS, ED, df):  # Decimal can be misread, so common sense check.
 
         TAmax = df.loc[df['Word'].str.contains('TAmax'), 'Value'].values[0] if df['Word'].str.contains('TAmax').any() else 0
         MD = df.loc[df['Word'].str.contains('MD'), 'Value'].values[0] if df['Word'].str.contains('MD').any() else 0
@@ -3548,7 +3675,7 @@ def metric_check(df):
 
         return PSnew, EDnew
 
-    PS, ED = check_TAmax_value(PS, ED, df)  # sense check for pressures
+    PS, ED = normalize_ps_ed_values(PS, ED, df)  # sense check for pressures
     df.loc[df['Word'].str.contains('PS'), 'Value'] = PS
     df.loc[df['Word'].str.contains('ED'), 'Value'] = ED
 
@@ -3557,7 +3684,7 @@ def metric_check(df):
     # Find RI
     RI_calc = (PS - ED) / PS
     # Find TAmax
-    TAmax_calc = (PS + (2 * ED)) / 3
+    TAmax_calc = (PS + (2 * ED)) / 3 # Approximaton of TAmax, to be used as a fallback.
 
     # Now check whether the PS & ED dependant metrics are consistent between calculated and extracted:
     # Extracted values with default as None if not present
@@ -3594,26 +3721,28 @@ def metric_check(df):
 
     def Metric_comparison(c_df, col):
 
-        # Tolerance level (you can adjust this based on your requirements)
-        tolerance1 = 0.2
-        tolerance2 = 4  # This tolerance is larger because the equation we used for TAmax is approximate
+        # Tolerance level for metrics directly derived from PS and ED
+        tolerance1 = 0.5
         conditions_met = []
         for parameter, extracted_name in [('SoverD', 'SoverD_extracted'), ('RI', 'RI_extracted'), ('TAmax', 'TAmax_extracted')]:
             extracted_value = c_df['Extracted'][extracted_name]
 
             if extracted_value is not None:
+                if parameter == 'TAmax':
+                    ps_val = c_df['Extracted']['PS_extracted']
+                    ed_val = c_df['Extracted']['ED_extracted']
+                    if ps_val is not None and ed_val is not None and abs(ed_val) < abs(extracted_value) < abs(ps_val):
+                        conditions_met.append('TAmax_bounds')
+                    continue
                 for row_name, calc_value in c_df.iloc[:, col].items():
                     if str(row_name).startswith(extracted_name[:-9]):  # If row name starts with the parameter name
-                        tolerance = tolerance1 if parameter != 'TAmax' else tolerance2
-                        if abs(calc_value - extracted_value) < tolerance:
+                        if abs(calc_value - extracted_value) < tolerance1:
                             conditions_met.append(row_name)
                             break  # Exit the inner loop once a match is found
 
         return conditions_met
 
     conditions_met = Metric_comparison(comparison_dataframe, 1)
-
-    # You've already extracted PS, SoverD_extracted, RI_extracted, and TAmax_extracted
 
     # Check if all 3 metrics are inconsistent
     if len(conditions_met) == 0:  # All 3 are not consistent
@@ -3703,7 +3832,6 @@ def metric_check(df):
                 df.loc[df['Word'].str.contains('RI'), 'Value'] = round((PS - ED) / PS, 2)
                 # Find TAmax
                 df.loc[df['Word'].str.contains('TAmax'), 'Value'] = round((PS + (2 * ED)) / 3, 2)
-
 
         except ZeroDivisionError:
             logger.error("Metric OCR: division by zero encountered while checking uterine/umbilical metrics")
@@ -3845,7 +3973,7 @@ def metric_check_dv(df):
 
     df = add_missing_rows(df)
 
-    def check_TAmax_value(value, df):  # Decimal can be misread, so common sense check.
+    def normalize_tamax_sign(value, df):  # Flip DV-TAmax sign only when TAmax is negative but DV-S/a, DV-S, and DV-D are all positive.
 
         PLI = df.loc[df['Word'] == 'DV-S/a', 'Value'].values[0]
         PS = df.loc[df['Word'] == 'DV-S', 'Value'].values[0]
@@ -3861,14 +3989,14 @@ def metric_check_dv(df):
     PI = df.loc[df['Word'] == 'DV-PI', 'Value'].values[0]
     df.loc[df['Word'] == 'DV-PI', 'Value'] = check_pi_value(PI)
     TAmax = df.loc[df['Word'] == 'DV-TAmax', 'Value'].values[0]
-    df.loc[df['Word'] == 'DV-TAmax', 'Value'] = check_TAmax_value(TAmax, df)
+    df.loc[df['Word'] == 'DV-TAmax', 'Value'] = normalize_tamax_sign(TAmax, df)
 
     # Peak systolic
     PS = df.loc[df['Word'] == 'DV-S', 'Value'].values[0]
     # End diastolic
     ED = df.loc[df['Word'] == 'DV-D', 'Value'].values[0]
 
-    def check_TAmax_value(PS, ED, df):  # Decimal can be misread, so common sense check.
+    def normalize_ps_ed_values(PS, ED, df):  # Decimal can be misread, so common sense check.
 
         TAmax = df.loc[df['Word'] == 'DV-TAmax', 'Value'].values[0]
         a = df.loc[df['Word'] == 'DV-a', 'Value'].values[0]
@@ -3883,7 +4011,7 @@ def metric_check_dv(df):
 
         return PS, ED
 
-    PS, ED = check_TAmax_value(PS, ED, df)  # sense check for pressures
+    PS, ED = normalize_ps_ed_values(PS, ED, df)  # sense check for pressures
 
     def check_S_D_value(value):  # Decimal can be misread, so common sense check.
         # If the value is between 0 and 2, return it as is
