@@ -16,11 +16,11 @@ logger = logging.getLogger(__file__)
 
 def test_data_from_image():
     """Test the data_from_image function."""
-    img_path = "C:/Users/dalek/OneDrive/Documents/SADIE/questionable_scans/DAPHNE-7_20220624_0_4b448b46.jpg"
+    img_path = 
 
-    PIL_image = Image.open(img_path)
-    cv2_image = np.array(PIL_image)
-    logger.info(f"Loaded image with shape {cv2_image.shape} and type {cv2_image.dtype}")
+    #PIL_image = Image.open(img_path)
+    #cv2_image = np.array(PIL_image)
+    #logger.info(f"Loaded image with shape {cv2_image.shape} and type {cv2_image.dtype}")
 
     df, (xdata, ydata) = data_from_image(image_path=img_path)
 
