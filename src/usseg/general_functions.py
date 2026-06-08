@@ -2962,9 +2962,10 @@ def text_from_greyscale(input_image_obj, COL):
         # Empty / whitespace-only OCR entries are removed here so that they do
         # not participate in line grouping or later matching.
         valid_indices = [
-            i for i, t in enumerate(OCR_data["text"])
+            ith for ith, t in enumerate(OCR_data["text"])
             if t is not None and t != "" and t != " "
         ]
+
         if not valid_indices:
             return [], []
 
@@ -3020,9 +3021,11 @@ def text_from_greyscale(input_image_obj, COL):
     tolerance = 5  # Adjust the tolerance value - the max difference between y-coords considered on the same line
     grouped_words, bounding_boxes = group_similar_numbers(y_center, tolerance, data)
 
+    if len(bounding_boxes) == 0:
+        return 1, None
+
     # The bounding box is expected in the form of (left, upper, right, lower)
     bounding_box_index = 0 if len(bounding_boxes) == 1 else 1
-    assert len(bounding_boxes) > 0
 
     left, top = bounding_boxes[bounding_box_index]['top_left']
     right, bottom = bounding_boxes[bounding_box_index]['bottom_right']
